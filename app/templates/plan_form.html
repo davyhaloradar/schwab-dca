@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<section class="card">
+  <h2>{{ title }}</h2>
+  <form method="post" action="{% if plan %}{{ bp() }}/plans/{{ plan.id }}/edit{% else %}{{ bp() }}/plans/new{% endif %}">
+    {{ csrf_field(request)|safe }}
+    <label>名称 / Name</label>
+    <input name="name" required value="{{ plan.name if plan else 'Daily ETF DCA' }}" />
+
+    <label>标的 Symbols（逗号分隔，如 VOO,QQQM）</label>
+    {% if plan %}
+    <p class="readonly-field"><code>{{ plan.symbols_raw }}</code></p>
+    <p class="muted" style="margin:0.25rem 0 0;">标的与账户创建后不可改；若要换标的请新建计划</p>
+    {% else %}
+    <input name="symbols" required placeholder="VOO,QQQM"
+           value="QQQM" />
+    {% endif %}
+
+    <label>每次股数 / Shares per symbol（≥1 时按股数下单，忽略金额换算）</label>
+    <input name="shares_per_symbol" type="number" min="0" step="1"
+           value="{{ plan.shares_per_symbol if plan else 1 }}" />
+
+    <label>每次总金额 USD（shares=0 时均分到各标的并 floor 成整股）</label>
+    <input name="amount_usd" type="number" step="0.01" min="0"
+           value="{{ plan.amount_usd if plan else 0 }}" />
+
+    {% set st = plan.schedule_type if plan else 'daily' %}
+    {% if st == 'cron' %}{% set st = 'daily' %}{% endif %}
+
+    <div class="form-row cols-2">
+      <div>
+        <label>定投频率 / Schedule</label>
+        <select name="schedule_type" id="schedule_type">
+          <option value="daily" {% if st=='daily' %}selected{% endif %}>按天 · 每个交易日</option>
+          <option value="weekly" {% if st=='weekly' %}selected{% endif %}>按周 · 指定星期</option>
+          <option value="monthly" {% if st=='monthly' %}selected{% endif %}>按月 · 指定日期</option>
+        </select>
+      </div>
+      <div>
+        <label>执行时间（计划时区，HH:MM）</label>
+        <input name="time_hhmm" id="time_hhmm" pattern="[0-2][0-9]:[0-5][0-9]" required
+               value="{{ plan.time_hhmm if plan else '10:00' }}" />
+      </div>
+    </div>
+
+    <div id="field-weekday" class="sched-extra" hidden>
+      <label>星期几（按周）</label>
+      <select name="weekday">
+        {% for val, label in weekdays %}
+          <option value="{{ val }}" {% if plan and plan.weekday==val %}selected{% elif not plan and val==0 %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div id="field-dom" class="sched-extra" hidden>
+      <label>每月几号（按月，1–28）</label>
+      <input name="day_of_month" type="number" min="1" max="28"
+             value="{{ plan.day_of_month if plan else 1 }}" />
+    </div>
+
+    <label>Timezone</label>
+    <input name="timezone" value="{{ plan.timezone if plan else 'America/New_York' }}" />
+
+    <input type="hidden" name="cron_expr" value="" />
+
+    <label>Account hash（LIVE 必填；绑定后只读锁定）</label>
+    {% if plan and plan.account_hash %}
+    <p class="readonly-field"><code>{{ plan.account_hash }}</code></p>
+    <p class="muted" style="margin:0.25rem 0 0;">
+      账户已自动/手动绑定并锁定，不可改
+      {% if account_auto_bound %}（本次已从 Schwab 自动绑定）{% endif %}
+    </p>
+    {% elif plan %}
+    <input name="account_hash" value="" placeholder="可选：手动填写；留空则保存时自动绑定" />
+    <p class="muted" style="margin:0.25rem 0 0;">当前为空：已连接 Schwab 时，下次保存/创建会自动绑定第一个账户；也可手动补填一次后锁定。LIVE 在仍为空时拒绝下单。</p>
+    {% else %}
+    {% if suggested_account_hash %}
+    <p class="readonly-field"><code>{{ suggested_account_hash }}</code></p>
+    <input type="hidden" name="account_hash" value="{{ suggested_account_hash }}" />
+    <p class="muted" style="margin:0.25rem 0 0;">已从 Schwab 自动预填第一个账户；保存后锁定不可改</p>
+    {% else %}
+    <input name="account_hash" value="" />
+    <p class="muted" style="margin:0.25rem 0 0;">未连接 Schwab 或暂无账户时请先 OAuth；已连接则保存时会自动绑定第一个账户。绑定后不可改。</p>
+    {% endif %}
+    {% endif %}
+
+    <div class="check">
+      <input type="checkbox" name="enabled" id="enabled"
+             {% if not plan or plan.enabled %}checked{% endif %} />
+      <label for="enabled" style="margin:0;">Enabled / 启用调度</label>
+    </div>
+
+    <p class="muted" style="margin-top:1rem;">
+      非美股交易日（周末与 NYSE 休市）会自动跳过，不会下单。
+      Schwab 股票市价单只接受整股；优先用「每次股数」。
+      LIVE 硬上限：每股数 ≤ DCA_MAX_SHARES_PER_SYMBOL（默认 5），名义金额 ≤ DCA_MAX_NOTIONAL_USD（默认 2000）。
+    </p>
+
+    <div class="form-actions">
+      <button class="btn btn-primary" type="submit">Save</button>
+      <a class="btn" href="{{ bp() }}/">Cancel</a>
+    </div>
+  </form>
+</section>
+<script>
+(function () {
+  const sel = document.getElementById('schedule_type');
+  const wd = document.getElementById('field-weekday');
+  const dom = document.getElementById('field-dom');
+  function sync() {
+    const v = sel.value;
+    wd.hidden = v !== 'weekly';
+    dom.hidden = v !== 'monthly';
+  }
+  sel.addEventListener('change', sync);
+  sync();
+})();
+</script>
+{% endblock %}

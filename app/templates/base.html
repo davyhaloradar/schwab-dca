@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}Schwab DCA{% endblock %}</title>
+  <link rel="stylesheet" href="{{ bp() }}/static/style.css" />
+</head>
+<body>
+  {% set mode_dry = dry_run_mode() %}
+  {% set path = request.url.path.rstrip('/') %}
+  {% set root = (bp() or '').rstrip('/') %}
+  {% set nav_dash = path == root or path == '' %}
+  {% set nav_new = path.endswith('/plans/new') %}
+  {% set nav_runs = path == root ~ '/runs' or path.endswith('/runs') %}
+  {% set nav_t = path == root ~ '/t' %}
+  {% set nav_oauth = '/auth/login' in path %}
+  {% set nav_notify = '/settings/notify' in path %}
+  <div class="wrap">
+    <header class="appbar">
+      <div class="brand">
+        <a class="brand-link" href="{{ bp() }}/">
+          <span class="brand-mark" aria-hidden="true">$</span>
+          <span class="brand-text">
+            <span class="brand-title">Schwab DCA</span>
+            <span class="brand-sub">定投</span>
+          </span>
+        </a>
+      </div>
+      <nav class="nav-pills" aria-label="主导航">
+        <a class="nav-pill{% if nav_dash %} is-active{% endif %}" href="{{ bp() }}/"{% if nav_dash %} aria-current="page"{% endif %}>Dashboard</a>
+        <a class="nav-pill{% if nav_new %} is-active{% endif %}" href="{{ bp() }}/plans/new"{% if nav_new %} aria-current="page"{% endif %}>新建计划</a>
+        <a class="nav-pill{% if nav_runs %} is-active{% endif %}" href="{{ bp() }}/runs"{% if nav_runs %} aria-current="page"{% endif %}>Run Log</a>
+        <a class="nav-pill{% if nav_t %} is-active{% endif %}" href="{{ bp() }}/t"{% if nav_t %} aria-current="page"{% endif %}>做T</a>
+        <a class="nav-pill{% if nav_oauth %} is-active{% endif %}" href="{{ bp() }}/auth/login"{% if nav_oauth %} aria-current="page"{% endif %}>OAuth Login</a>
+        <a class="nav-pill{% if nav_notify %} is-active{% endif %}" href="{{ bp() }}/settings/notify"{% if nav_notify %} aria-current="page"{% endif %}>通知设置</a>
+      </nav>
+      <div class="mode-toggle">
+        {% if mode_dry %}
+        <form method="post" action="{{ bp() }}/settings/dry-run"
+              onsubmit="if(!confirm('切换到实盘？启用后，Run now 与定时任务将向 Schwab 提交真实市价买单。')) return false; this.querySelector('button').disabled=true; return true;">
+          {{ csrf_field(request)|safe }}
+          <input type="hidden" name="dry_run" value="false" />
+          <button class="btn badge-toggle badge-toggle-dry" type="submit" title="当前模拟，点击切到实盘">
+            DRY-RUN · 点此切到实盘
+          </button>
+        </form>
+        {% else %}
+        <form method="post" action="{{ bp() }}/settings/dry-run"
+              onsubmit="this.querySelector('button').disabled=true;">
+          {{ csrf_field(request)|safe }}
+          <input type="hidden" name="dry_run" value="true" />
+          <button class="btn badge-toggle badge-toggle-live" type="submit" title="当前实盘，点击切回模拟">
+            LIVE · 点此切回模拟
+          </button>
+        </form>
+        {% endif %}
+        {% if notify_email_on() %}
+        <form method="post" action="{{ bp() }}/settings/notify-email"
+              onsubmit="this.querySelector('button').disabled=true;">
+          {{ csrf_field(request)|safe }}
+          <input type="hidden" name="enabled" value="false" />
+          <button class="btn badge-toggle badge-toggle-notify-on" type="submit" title="邮件通知已开，点击关闭">
+            邮件 · 开
+          </button>
+        </form>
+        {% else %}
+        <form method="post" action="{{ bp() }}/settings/notify-email"
+              onsubmit="this.querySelector('button').disabled=true;">
+          {{ csrf_field(request)|safe }}
+          <input type="hidden" name="enabled" value="true" />
+          <button class="btn badge-toggle badge-toggle-notify-off" type="submit" title="邮件通知已关，点击开启">
+            邮件 · 关
+          </button>
+        </form>
+        {% endif %}
+        {% if notify_on_manual() %}
+        <form method="post" action="{{ bp() }}/settings/notify-on-manual"
+              onsubmit="this.querySelector('button').disabled=true;">
+          {{ csrf_field(request)|safe }}
+          <input type="hidden" name="enabled" value="false" />
+          <button class="btn badge-toggle badge-toggle-notify-on" type="submit" title="手动运行也会发通知，点击改为仅调度">
+            手动也通知 · 开
+          </button>
+        </form>
+        {% else %}
+        <form method="post" action="{{ bp() }}/settings/notify-on-manual"
+              onsubmit="this.querySelector('button').disabled=true;">
+          {{ csrf_field(request)|safe }}
+          <input type="hidden" name="enabled" value="true" />
+          <button class="btn badge-toggle badge-toggle-notify-off" type="submit" title="手动运行不发通知，点击开启">
+            手动也通知 · 关
+          </button>
+        </form>
+        {% endif %}
+      </div>
+    </header>
+
+    {% if mode_dry %}
+    <div class="banner dry">
+      <strong>安全模式 / Safety:</strong>
+      当前为 <code>DRY-RUN</code> — 定投只会记录拟下单 JSON，不会向 Schwab 提交真实订单。
+      右上角可一切换到实盘。
+    </div>
+    {% else %}
+    <div class="banner live">
+      <strong>警告 / LIVE:</strong>
+      当前为实盘 — 启用的计划与「Run now」将提交真实市价买单。请确认账户与金额；右上角可切回模拟。
+    </div>
+    {% endif %}
+
+    <div class="banner plugin">
+      规则策略插件位 / Quant plugin stub：<code>Strategy.evaluate(ctx) → list[OrderIntent]</code>，
+      当前为 <code>NoopStrategy</code>。后续接入自定义规则。
+    </div>
+
+    {% block content %}{% endblock %}
+
+    <footer>
+      Local-only Schwab personal Trader API helper · tokens encrypted at rest · refresh ~7 days
+    </footer>
+  </div>
+</body>
+</html>

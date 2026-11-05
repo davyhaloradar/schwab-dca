@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · Schwab DCA{% endblock %}
+{% block content %}
+<section class="card">
+  <h2>{{ title }}</h2>
+  <p class="muted">实盘两步确认：核对拟下单与现金后，再提交。定时任务不会经过此页，但仍应用 allowlist / 日额度 / 现金预检。</p>
+
+  <dl class="preview-meta">
+    <dt>计划</dt><dd>{{ plan.name }}</dd>
+    <dt>标的</dt><dd>{{ plan.symbols_raw }}</dd>
+    <dt>预估金额</dt><dd><strong>${{ "%.2f"|format(preview.estimated_notional or 0) }}</strong></dd>
+    <dt>可用现金（不含融资）</dt>
+    <dd>
+      {% if preview.cash_available is none %}
+        <span class="badge badge-warn">未能读取可用现金</span>
+        <span class="muted">— 确认后将跳过本次定投（不会用融资下单）</span>
+      {% else %}
+        ${{ "%.2f"|format(preview.cash_available) }}
+        {% if preview.cash_ok %}
+          <span class="badge badge-ok">足够</span>
+        {% else %}
+          <span class="badge badge-warn">不足 — 确认后将跳过·现金不足，不下单</span>
+        {% endif %}
+      {% endif %}
+      <div class="muted cash-field-note">定投只用可用现金，不会使用融资购买力。</div>
+    </dd>
+  </dl>
+
+  {% if preview.over_policy %}
+  <div class="alert alert-warn">
+    <strong>策略拒绝（确认后也不会下单）</strong>
+    <pre>{{ preview.policy_notes|join('\n') }}</pre>
+  </div>
+  {% endif %}
+  {% if preview.over_cap %}
+  <div class="alert alert-warn">
+    <strong>硬上限（LIVE 将拒绝）</strong>
+    <pre>{{ preview.cap_notes|join('\n') }}</pre>
+  </div>
+  {% endif %}
+
+  <h3>拟下单</h3>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>标的</th><th>数量</th><th>参考价</th><th>金额</th><th>状态</th></tr>
+      </thead>
+      <tbody>
+        {% for o in preview.intended_orders %}
+        <tr>
+          <td>{{ o.symbol }}</td>
+          <td>{{ o.quantity }}</td>
+          <td>${{ "%.4f"|format(o.price_used) }}{% if o.price_placeholder %} <span class="badge badge-warn">ph</span>{% endif %}</td>
+          <td>${{ "%.2f"|format((o.quantity or 0) * (o.price_used or 0)) }}</td>
+          <td>{% if o.skipped %}<span class="badge badge-warn">跳过</span> {{ o.skip_reason }}{% else %}<span class="badge badge-ok">买入</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="dash-card-actions" style="margin-top:1rem;display:flex;gap:0.5rem;flex-wrap:wrap;">
+    <a class="btn" href="{{ bp() }}/">取消</a>
+    {% if preview.over_policy or preview.over_cap %}
+      <button class="btn btn-danger" type="button" disabled>无法确认（策略/上限）</button>
+    {% else %}
+    <form method="post" action="{{ bp() }}/plans/{{ plan.id }}/run"
+          onsubmit="var b=this.querySelector('button'); if(!confirm('确认提交真实市价买单？')) return false; b.disabled=true; b.textContent='提交中…'; return true;">
+      {{ csrf_field(request)|safe }}
+      <input type="hidden" name="confirm" value="1" />
+      <button class="btn btn-primary" type="submit">确认实盘下单</button>
+    </form>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block title %}Run Log · Schwab DCA{% endblock %}
+{% block content %}
+<section class="card">
+  <h2>运行日志 / Run Log</h2>
+  <p class="muted">实盘订单会核对券商成交状态；未成交的可撤单。结果按是否调度、是否成交、是否撤单展示，不会仅因「已提交」显示成功。</p>
+  {% if not logs %}
+    <p class="empty">暂无记录。在 Dashboard 对计划点「立即运行」，或等待调度触发。</p>
+  {% else %}
+    {% for log in logs %}
+      <article class="run-entry">
+        <div class="run-meta">
+          <strong>#{{ log.id }}</strong>
+          <span class="run-time">{{ china_time_html(log.created_at)|safe }}</span>
+          <span class="run-plan">{{ log.plan_name or ("计划 " ~ log.plan_id) }}</span>
+          {% set st = run_status_info(log) %}
+          <span class="badge badge-muted">{{ st.trigger_label }}</span>
+          {% if log.dry_run %}<span class="badge badge-dry">模拟</span>
+          {% else %}<span class="badge badge-live">实盘</span>{% endif %}
+          <span class="badge {{ st.badge_class }}">{{ st.label }}</span>
+        </div>
+        {% if log.error %}<p class="muted">{{ log.error }}</p>{% endif %}
+
+        {% if log.order_statuses %}
+          <label>订单明细</label>
+
+          {# Desktop / wide: scrollable table #}
+          <div class="table-scroll order-table-desktop">
+            <table class="order-table">
+              <thead>
+                <tr>
+                  <th>标的</th><th>订单号</th><th>状态</th>
+                  <th>成交</th><th>成交价</th><th></th>
+                </tr>
+              </thead>
+              <tbody>
+              {% for o in log.order_statuses %}
+                {% set fl = fill_label(o.filled_quantity, o.quantity, o.status) %}
+                {% set oc = order_status_cn(o.status) %}
+                <tr>
+                  <td>{{ o.symbol or "—" }}</td>
+                  <td><code class="oid">{{ o.order_id or "—" }}</code></td>
+                  <td>
+                    <span class="badge {{ oc.badge_class }}">{{ oc.label }}</span>
+                    {% if o.error %}<div class="muted">{{ o.error }}</div>{% endif %}
+                    {% if o.note %}<div class="muted">{{ o.note }}</div>{% endif %}
+                  </td>
+                  <td class="fill-cell">
+                    {% if o.status == 'DRY_RUN' %}
+                      <span class="muted">—</span>
+                    {% else %}
+                      <div class="fill-text">{{ fl.text }}</div>
+                      {% if fl.badge %}<span class="badge {{ fl.badge_class }}">{{ fl.badge }}</span>{% endif %}
+                    {% endif %}
+                  </td>
+                  <td class="price-cell">
+                    {% set pl = fill_price_label(o.average_price, o.filled_quantity, o.status) %}
+                    {% if pl %}<span class="fill-price">{{ pl }}</span>{% else %}<span class="muted">—</span>{% endif %}
+                  </td>
+                  <td class="actions">
+                    {% if o.cancelable and o.order_id %}
+                    <form class="inline" method="post"
+                          action="{{ bp() }}/runs/{{ log.id }}/orders/{{ o.order_id }}/cancel"
+                          onsubmit="var b=this.querySelector('button'); if(!confirm('确认向 Schwab 撤销订单 {{ o.order_id }}？')) return false; b.disabled=true; return true;">
+                      {{ csrf_field(request)|safe }}
+                      <button class="btn btn-danger btn-touch" type="submit">撤单</button>
+                    </form>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+              </tbody>
+            </table>
+          </div>
+
+          {# Mobile: stacked order cards #}
+          <div class="order-cards-mobile">
+            {% for o in log.order_statuses %}
+              {% set fl = fill_label(o.filled_quantity, o.quantity, o.status) %}
+              <div class="order-card">
+                {% set oc = order_status_cn(o.status) %}
+                <div class="order-card-row">
+                  <span class="order-card-symbol">{{ o.symbol or "—" }}</span>
+                  <span class="badge {{ oc.badge_class }}">{{ oc.label }}</span>
+                </div>
+                {% if o.order_id %}
+                <div class="order-card-id muted">订单号 <code class="oid">{{ o.order_id }}</code></div>
+                {% endif %}
+                {% if o.error %}<div class="muted">{{ o.error }}</div>{% endif %}
+                {% if o.note %}<div class="muted">{{ o.note }}</div>{% endif %}
+                {% if o.status != 'DRY_RUN' %}
+                <div class="order-card-fill">
+                  <span class="fill-text">{{ fl.text }}</span>
+                  {% if fl.badge %}<span class="badge {{ fl.badge_class }}">{{ fl.badge }}</span>{% endif %}
+                </div>
+                {% set pl = fill_price_label(o.average_price, o.filled_quantity, o.status) %}
+                {% if pl %}<div class="order-card-price fill-price">{{ pl }}</div>{% endif %}
+                {% endif %}
+                {% if o.cancelable and o.order_id %}
+                <form method="post"
+                      action="{{ bp() }}/runs/{{ log.id }}/orders/{{ o.order_id }}/cancel"
+                      onsubmit="var b=this.querySelector('button'); if(!confirm('确认向 Schwab 撤销订单 {{ o.order_id }}？')) return false; b.disabled=true; return true;">
+                  {{ csrf_field(request)|safe }}
+                  <button class="btn btn-danger btn-touch btn-block" type="submit">撤单</button>
+                </form>
+                {% endif %}
+              </div>
+            {% endfor %}
+          </div>
+
+          {% if not log.dry_run %}
+          <form class="inline refresh-form" method="post" action="{{ bp() }}/runs/{{ log.id }}/refresh">
+            {{ csrf_field(request)|safe }}
+            <button class="btn btn-touch" type="submit">刷新订单状态</button>
+          </form>
+          {% endif %}
+        {% endif %}
+
+        <details class="run-details">
+          <summary class="muted">技术详情（一般无需查看）</summary>
+          <p class="muted">以下为系统内部记录，供排查用；日常请以上方状态与订单明细为准。</p>
+          {% if log.result_json %}
+            <label>运行结果</label>
+            <pre class="json">{{ log.result_json }}</pre>
+          {% endif %}
+        </details>
+      </article>
+    {% endfor %}
+  {% endif %}
+
+  {% if total_pages and total_pages > 1 %}
+  <nav class="pagination" aria-label="运行日志分页">
+    <div class="pagination-meta muted">
+      共 {{ total }} 条 · 每页 {{ page_size }} · 第 {{ page }} / {{ total_pages }} 页
+    </div>
+    <div class="pagination-controls">
+      {% if has_prev %}
+        <a class="btn btn-ghost" href="{{ bp() }}/runs?page={{ page - 1 }}">← 上一页</a>
+      {% else %}
+        <span class="btn btn-ghost disabled" aria-disabled="true">← 上一页</span>
+      {% endif %}
+      {% for p in page_window %}
+        {% if p == page %}
+          <span class="btn btn-primary pagination-page current" aria-current="page">{{ p }}</span>
+        {% else %}
+          <a class="btn btn-ghost pagination-page" href="{{ bp() }}/runs?page={{ p }}">{{ p }}</a>
+        {% endif %}
+      {% endfor %}
+      {% if has_next %}
+        <a class="btn btn-ghost" href="{{ bp() }}/runs?page={{ page + 1 }}">下一页 →</a>
+      {% else %}
+        <span class="btn btn-ghost disabled" aria-disabled="true">下一页 →</span>
+      {% endif %}
+    </div>
+  </nav>
+  {% elif total %}
+  <p class="pagination-meta muted">共 {{ total }} 条（不足一页，无需分页）</p>
+  {% endif %}
+</section>
+{% endblock %}

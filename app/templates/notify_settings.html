@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}通知设置 · Schwab DCA{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="card-header">
+    <h2>通知设置 / Email & SMTP</h2>
+  </div>
+
+  {% if flash_err %}
+  <div class="banner live" role="alert">{{ flash_err }}</div>
+  {% endif %}
+  {% if flash %}
+  <div class="banner dry" role="status">{{ flash }}</div>
+  {% endif %}
+
+  <p class="muted" style="margin-top:0;">
+    配置定投通知发到哪个邮箱，以及 163 SMTP 凭证。也可继续用 <code>.env</code> 覆盖；此处保存会写入服务器 <code>.env</code> 并立即生效（无需重启）。
+  </p>
+
+  <p class="muted">
+    状态：
+    {% if email_configured %}
+      <span class="badge badge-ok">已配置且邮件开关开</span>
+    {% elif settings.email_notify_enabled() %}
+      <span class="badge badge-warn">开关开，但凭证不完整</span>
+    {% else %}
+      <span class="badge badge-muted">邮件总开关关</span>
+    {% endif %}
+    · 右上角可切换「邮件 · 开/关」「手动也通知」
+  </p>
+
+  <form method="post" action="{{ bp() }}/settings/notify" autocomplete="off">
+    {{ csrf_field(request)|safe }}
+
+    <div class="form-row cols-2">
+      <div>
+        <label for="email_to">收件人邮箱 / TO <span class="req">*</span></label>
+        <input id="email_to" name="email_to" type="email" required
+               placeholder="you@example.com"
+               value="{{ settings.dca_notify_email_to or '' }}" />
+        <p class="muted" style="margin:0.25rem 0 0;">通知发到这个地址</p>
+      </div>
+      <div>
+        <label for="email_from">发件人 / FROM（可选）</label>
+        <input id="email_from" name="email_from" type="email"
+               placeholder="默认与 TO 或 SMTP 用户相同"
+               value="{{ settings.dca_notify_email_from or '' }}" />
+        <p class="muted" style="margin:0.25rem 0 0;">163 通常需与 SMTP 用户一致</p>
+      </div>
+    </div>
+
+    <h3 style="margin:1.35rem 0 0.5rem;font-size:1rem;">SMTP（网易 163）</h3>
+    <p class="muted" style="margin-top:0;">
+      163 示例：主机 <code>smtp.163.com</code>，端口 <code>465</code>（SSL）。
+      密码栏请填<strong>授权码</strong>，不是登录密码（邮箱设置 → POP3/SMTP/IMAP → 开启并生成授权码）。
+    </p>
+
+    <div class="form-row cols-2">
+      <div>
+        <label for="smtp_host">SMTP 主机</label>
+        <input id="smtp_host" name="smtp_host"
+               value="{{ settings.dca_notify_smtp_host or 'smtp.163.com' }}" />
+      </div>
+      <div>
+        <label for="smtp_port">端口</label>
+        <input id="smtp_port" name="smtp_port" type="number" min="1" max="65535"
+               value="{{ settings.dca_notify_smtp_port or 465 }}" />
+        <p class="muted" style="margin:0.25rem 0 0;">465=SSL；587=STARTTLS</p>
+      </div>
+    </div>
+
+    <div class="form-row cols-2">
+      <div>
+        <label for="smtp_user">SMTP 用户（完整邮箱）</label>
+        <input id="smtp_user" name="smtp_user" type="email" autocomplete="username"
+               placeholder="you@example.com"
+               value="{{ settings.dca_notify_smtp_user or '' }}" />
+      </div>
+      <div>
+        <label for="smtp_password">SMTP 授权码 / 密码</label>
+        <input id="smtp_password" name="smtp_password" type="password"
+               autocomplete="new-password"
+               value=""
+               placeholder="{% if smtp_password_set %}已配置（留空不修改）{% else %}未配置，请填写授权码{% endif %}" />
+        <p class="muted" style="margin:0.25rem 0 0;">
+          {% if smtp_password_set %}
+          已保存授权码；留空提交则保持不变。填新值可更换。
+          {% else %}
+          尚未配置；提交时请填写 163 授权码。
+          {% endif %}
+        </p>
+      </div>
+    </div>
+
+    <div class="form-actions">
+      <button class="btn btn-primary" type="submit">保存通知设置</button>
+      <a class="btn" href="{{ bp() }}/">返回 Dashboard</a>
+    </div>
+  </form>
+
+  <form method="post" action="{{ bp() }}/settings/notify/test" style="margin-top:1rem;"
+        onsubmit="this.querySelector('button').disabled=true;">
+    {{ csrf_field(request)|safe }}
+    <button class="btn" type="submit"
+            title="用当前配置发一封测试邮件（绕过手动/调度开关，仍需凭证完整且邮件总开关开）">
+      发送测试邮件
+    </button>
+    <span class="muted" style="margin-left:0.5rem;">验证 SMTP 是否可用</span>
+  </form>
+</section>
+{% endblock %}

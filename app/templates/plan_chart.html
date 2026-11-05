@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block title %}日线 · {{ plan.name }} · Schwab DCA{% endblock %}
+{% block content %}
+<section class="card chart-page">
+  <div class="chart-header">
+    <div>
+      <h2 style="margin:0;">日线 · {{ plan.name }}</h2>
+      <p class="muted" style="margin:0.35rem 0 0;">
+        标的 {{ active_symbol or "—" }}
+        · 数据源 <code>{{ source }}</code>
+      </p>
+    </div>
+    <a class="btn btn-touch" href="{{ bp() }}/">← 返回 Dashboard</a>
+  </div>
+
+  {% if symbols|length > 1 %}
+  <div class="chart-tabs" role="tablist">
+    {% for s in symbols %}
+      <a class="btn chart-tab{% if s == active_symbol %} chart-tab-active{% endif %}"
+         href="{{ bp() }}/plans/{{ plan.id }}/chart?symbol={{ s }}">{{ s }}</a>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if history_error %}
+  <p class="banner live" style="margin-top:0.85rem;">无法拉取行情：{{ history_error }}</p>
+  {% endif %}
+
+  {% if not has_live_fills %}
+  <p class="banner plugin" style="margin-top:0.85rem;">暂无实盘定投标记</p>
+  {% else %}
+  <p class="muted" style="margin-top:0.75rem;">
+    橙点 = 该计划实盘成交日（成交均价；同日多笔合成一点，可能偏离收盘线）。
+    {% if markers %}当前标的 {{ markers|length }} 个交易日有成交。{% else %}当前标的暂无成交点。{% endif %}
+  </p>
+  {% endif %}
+
+  {% if candles %}
+  <div class="chart-wrap">
+    <canvas id="dcaChart" aria-label="日线收盘价与定投标记"></canvas>
+  </div>
+  <div class="chart-legend muted">
+    <span><span class="lg-line"></span> 日线收盘</span>
+    <span><span class="lg-dot"></span> 实盘定投</span>
+  </div>
+  {% elif not history_error %}
+  <p class="empty">暂无可用的历史行情。</p>
+  {% endif %}
+</section>
+
+{% if candles %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+  const candles = {{ candles | tojson }};
+  const markers = {{ markers | tojson }};
+  const labels = candles.map(c => c.date);
+  const closes = candles.map(c => c.close);
+  const metaByIdx = {};
+  // Backend already merges same-ET-day fills into one VWAP marker per symbol.
+  // Y = 均价 (may sit off the close line — intentional).
+  const fillData = labels.map((d, i) => {
+    const hit = markers.find(m => m.date === d) || null;
+    if (!hit) return null;
+    metaByIdx[i] = hit;
+    return (hit.price && hit.price > 0) ? hit.price : closes[i];
+  });
+
+  const ctx = document.getElementById('dcaChart');
+  new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: '收盘价',
+          data: closes,
+          borderColor: '#3b82f6',
+          backgroundColor: 'rgba(59,130,246,0.12)',
+          borderWidth: 2,
+          pointRadius: 0,
+          pointHitRadius: 6,
+          tension: 0.15,
+          fill: true,
+          order: 2,
+        },
+        {
+          label: '实盘定投',
+          data: fillData,
+          borderColor: 'transparent',
+          backgroundColor: '#f59e0b',
+          pointBackgroundColor: '#f59e0b',
+          pointBorderColor: '#fbbf24',
+          pointBorderWidth: 2,
+          pointRadius: (ctx) => (ctx.raw == null ? 0 : 7),
+          pointHoverRadius: (ctx) => (ctx.raw == null ? 0 : 9),
+          showLine: false,
+          order: 1,
+          spanGaps: false,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'nearest', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          filter: (it) => !(it.dataset.label === '实盘定投' && it.raw == null),
+          callbacks: {
+            title(items) {
+              const it = items[0];
+              return it ? (it.label || '') : '';
+            },
+            label(it) {
+              if (it.dataset.label === '实盘定投') {
+                const m = metaByIdx[it.dataIndex];
+                if (!m) return null;
+                const priceStr = (m.price != null) ? ('$' + Number(m.price).toFixed(2)) : '—';
+                const qty = m.filled_qty != null ? Number(m.filled_qty) : null;
+                const qtyStr = qty != null
+                  ? (Number.isInteger(qty) ? String(qty) : qty.toFixed(4).replace(/\.?0+$/, ''))
+                  : '—';
+                const n = m.fill_count != null ? Number(m.fill_count) : 1;
+                return '均价 ' + priceStr + ' · 总股数 ' + qtyStr + ' · 笔数 ' + n;
+              }
+              const v = it.parsed.y;
+              return '收盘 $' + (v != null ? Number(v).toFixed(2) : '—');
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: {
+            maxRotation: 0,
+            autoSkip: true,
+            maxTicksLimit: 8,
+            color: '#8b9bb4',
+            font: { size: 11 },
+          },
+          grid: { color: 'rgba(45,58,79,0.5)' },
+        },
+        y: {
+          ticks: {
+            color: '#8b9bb4',
+            callback: (v) => '$' + Number(v).toFixed(2),
+          },
+          grid: { color: 'rgba(45,58,79,0.5)' },
+        },
+      },
+    },
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

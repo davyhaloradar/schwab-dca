@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+{% block title %}做T · 5分钟 VWAP · Schwab DCA{% endblock %}
+{% block content %}
+<section class="card t-page">
+  <div class="card-header">
+    <div>
+      <h2>5分钟 VWAP 均值回归 · 做T</h2>
+      <p class="muted t-help">{{ snap.help }}</p>
+    </div>
+    <div class="t-engine-actions">
+      {% if snap.engine_running %}
+      <form method="post" action="{{ bp() }}/t/stop" class="inline">
+        {{ csrf_field(request)|safe }}
+        <button class="btn btn-danger" type="submit">停止监控</button>
+      </form>
+      {% else %}
+      <form method="post" action="{{ bp() }}/t/start" class="inline"
+            onsubmit="if(!confirm('开始按 5 分钟 VWAP 规则模拟做T？不会向 Schwab 下单。启动后会补记今日已收盘 K 线的信号。')) return false; this.querySelector('button').disabled=true; return true;">
+        {{ csrf_field(request)|safe }}
+        <button class="btn btn-primary" type="submit">启动监控</button>
+      </form>
+      {% endif %}
+      <form method="post" action="{{ bp() }}/t/reset" class="inline"
+            onsubmit="if(!confirm('清空今日模拟成交（全部标的），并从现在起不再重放更早的 K 线？')) return false; this.querySelector('button').disabled=true; return true;">
+        {{ csrf_field(request)|safe }}
+        <button class="btn" type="submit">清空今日模拟</button>
+      </form>
+      <form method="post" action="{{ bp() }}/t/reset-symbol" class="inline" id="t-reset-symbol-form"
+            onsubmit="var s=(this.querySelector('[name=symbol]').value||'').toUpperCase(); if(!s){alert('请先选择标的'); return false;} if(!confirm('清空 '+s+' 的全部模拟成交（含以往交易日）？不会重放该标的已经走过的今日 K 线。其它标的保留。')) return false; this.querySelector('button').disabled=true; return true;">
+        {{ csrf_field(request)|safe }}
+        <input type="hidden" name="symbol" id="t-clear-symbol" value="{{ snap.symbols[0] if snap.symbols else '' }}" />
+        <button class="btn" type="submit" id="t-clear-symbol-btn">清空此标的全部模拟</button>
+      </form>
+    </div>
+  </div>
+
+  {% if snap.global_dry_run %}
+  <div class="banner dry">
+    <strong>做T 模拟：</strong>
+    本页 v1 只按 mid / 最新价或触发价模拟成交，<strong>不会</strong>向 Schwab 提交做T订单。
+    右上角 DRY-RUN 只控制定投。
+  </div>
+  {% else %}
+  <div class="banner live">
+    <strong>做T 仍是模拟：</strong>
+    全局已切到定投实盘，但做T v1 不下单。本表成交不是真实委托。
+  </div>
+  {% endif %}
+
+  {% if error %}
+  <p class="banner live">{{ error }}</p>
+  {% endif %}
+  <div id="t-errors">
+    {% for err in snap.errors %}
+    <p class="banner live">{{ err }}</p>
+    {% endfor %}
+  </div>
+
+  <div class="chart-tabs" id="t-symbol-tabs" role="tablist" aria-label="标的">
+    {% for sym in snap.symbols %}
+    <button type="button" class="btn chart-tab{% if loop.first %} chart-tab-active{% endif %}" data-symbol="{{ sym }}">{{ sym }}</button>
+    {% endfor %}
+  </div>
+
+  <div class="t-mode-bar" role="group" aria-label="行情模式">
+    <button type="button" class="btn chart-tab chart-tab-active" id="t-mode-live">实时</button>
+    <button type="button" class="btn chart-tab" id="t-mode-replay">回看</button>
+    <label class="muted" for="t-replay-range">范围</label>
+    <select id="t-replay-range" disabled aria-label="回看范围">
+      <option value="day">指定天</option>
+      <option value="1w">近1周</option>
+      <option value="1m" selected>近1月</option>
+      <option value="3m">近3月</option>
+      <option value="6m">近6月</option>
+      <option value="1y">近1年</option>
+    </select>
+    <span id="t-replay-day-wrap" hidden>
+      <label class="muted" for="t-replay-date">交易日</label>
+      <select id="t-replay-date" disabled>
+        <option value="">选择交易日</option>
+      </select>
+    </span>
+  </div>
+  <p id="t-replay-note" class="muted" hidden>回看只显示该日 5 分钟行情和已保存的模拟成交，不会补写新成交。更早的日期来自本地 K 线缓存。</p>
+
+  <p id="t-status" class="muted t-status">正在连接行情…</p>
+  <div id="t-positions" class="t-positions"></div>
+
+  <div id="t-chart" class="t-chart" style="display:block;width:100%;height:440px;min-height:420px;" role="img" aria-label="5分钟价格与 VWAP"></div>
+  <p id="t-chart-empty" class="empty" hidden>暂无 5 分钟 K 线。开盘后、或备用行情可用时会显示最近一个交易日。</p>
+  <div class="chart-legend muted">
+    <span><span class="lg-candle"></span> 5 分钟价格</span>
+    <span><span class="lg-vwap"></span> 当日 VWAP</span>
+    <span><span class="lg-entry"></span> 买入</span>
+    <span><span class="lg-exit"></span> 出场</span>
+    <span><span class="lg-stop"></span> 止损</span>
+    <span><span class="lg-buy"></span> 模拟买</span>
+    <span><span class="lg-sell"></span> 模拟卖</span>
+    <span>时间轴为美东 ET · 三条曲线随 VWAP 变化</span>
+  </div>
+
+  <div class="table-scroll t-params-wrap">
+    <table class="t-params">
+      <thead>
+        <tr>
+          <th>标的</th>
+          <th>入场（低于 VWAP）</th>
+          <th>出场</th>
+          <th>止损</th>
+          <th>参数来源</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for sym in snap.symbols %}
+        {% set p = snap.params[sym] %}
+        <tr>
+          <td>{{ sym }}</td>
+          <td>{{ p.entry_bps_label }} bps</td>
+          <td>回到 VWAP（{{ p.exit_bps|round(0)|int }} bps 内）</td>
+          <td>{{ p.stop_bps_label }} bps</td>
+          <td>{% if p.param_source == 'backtest' %}5 分钟回测{% else %}未单独回测，沿用 QQQM{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <form method="post" action="{{ bp() }}/t/settings" class="t-settings">
+    {{ csrf_field(request)|safe }}
+    <div class="form-row cols-2">
+      <div>
+        <label for="t-symbols">标的（逗号分隔，默认 QQQM、AAPL）</label>
+        <input id="t-symbols" name="symbols" value="{{ snap.symbols_raw }}" autocomplete="off" />
+      </div>
+      <div>
+        <label for="t-notional">每笔名义金额（美元，整股）</label>
+        <input id="t-notional" name="notional_usd" type="number" min="100" max="20000" step="100" value="{{ snap.notional_usd|round(0)|int }}" />
+      </div>
+    </div>
+    <div class="form-actions">
+      <button class="btn" type="submit">保存标的</button>
+      <span class="muted">平仓时点 {{ snap.flat_at }} ET · 最多 1 笔未平仓 / 标的</span>
+    </div>
+  </form>
+</section>
+
+<section class="card mt">
+  <div class="card-header">
+    <h2>模拟成交</h2>
+    <span id="t-stream-state" class="badge badge-dry">连接中</span>
+  </div>
+  <p id="t-table-note" class="muted">启动监控后，新成交会追加到下表，无需整页刷新。</p>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>时间</th>
+          <th>标的</th>
+          <th>方向</th>
+          <th>数量</th>
+          <th>价格</th>
+          <th>盈亏</th>
+          <th>触发原因</th>
+        </tr>
+      </thead>
+      <tbody id="t-trades">
+        {% if not snap.trades %}
+        <tr><td colspan="7" class="empty">尚无模拟成交。启动监控后，今日信号会写到这里。</td></tr>
+        {% else %}
+        {% for t in snap.trades|reverse %}
+        <tr>
+          <td>
+            <div class="ts-china">{{ t.time_cn }}</div>
+            <div class="muted ts-utc">{{ t.time_et }}</div>
+          </td>
+          <td>{{ t.symbol }}</td>
+          <td><span class="badge {{ 'badge-buy' if t.side == 'BUY' else 'badge-sell' }}">{{ '买入' if t.side == 'BUY' else '卖出' }}</span></td>
+          <td>{{ t.qty }}</td>
+          <td class="price-cell">{{ '%.4f'|format(t.price) }}<div class="muted ts-utc">{{ t.price_source_label }}</div></td>
+          <td class="{% if t.side == 'SELL' and t.pnl is not none %}{{ 'pnl-pos' if t.pnl >= 0 else 'pnl-neg' }}{% else %}muted{% endif %}">{% if t.side == 'SELL' and t.pnl is not none %}{{ '%+.2f'|format(t.pnl) }}{% else %}持仓中{% endif %}</td>
+          <td>{{ t.reason_label }}</td>
+        </tr>
+        {% endfor %}
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<script id="t-boot" type="application/json">{{ boot_json | safe }}</script>
+<script src="{{ bp() }}/static/lightweight-charts.standalone.production.js"></script>
+<script src="{{ bp() }}/static/t_monitor.js"></script>
+{% endblock %}

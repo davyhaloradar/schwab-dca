@@ -1,0 +1,41 @@
+# Secrets & local env (never commit real credentials)
+.env
+.env.*
+!.env.example
+
+# Runtime data: SQLite, Fernet keys, tokens, notify logs
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.key
+*.pem
+*.crt
+*.p12
+token*.json
+**/tokens.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Deploy / nginx auth leftovers
+.htpasswd*
+*.htpasswd
+nginx*.conf.local

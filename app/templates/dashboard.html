@@ -1,0 +1,398 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · Schwab DCA{% endblock %}
+{% block content %}
+{% macro spot_label(sym) -%}
+  {%- set mp = market_prices.get(sym) if market_prices else none -%}
+  {%- if mp is not none -%}<span class="market-price">现价 ${{ fmt_price(mp) }}</span>{%- else -%}<span class="muted market-price">现价 —</span>{%- endif -%}
+{%- endmacro %}
+{% macro pnl_span(sym, avg_cost) -%}
+  {%- set mp = market_prices.get(sym) if market_prices else none -%}
+  {{ pnl_label(avg_cost, mp)|safe }}
+{%- endmacro %}
+{% macro holdings_summary(p) -%}
+  {%- set h = plan_holdings.get(p.id) if plan_holdings else none -%}
+  {%- if h -%}
+  <div class="plan-holdings">
+    <span class="hold-item">总股数 <strong>{{ h.total_shares }}</strong></span>
+    <span class="hold-item">总市值
+      {%- if h.total_market_value is not none -%}
+        <strong>${{ "%.2f"|format(h.total_market_value) }}</strong>
+      {%- else -%}
+        <span class="muted">—</span>
+      {%- endif -%}
+    </span>
+    <span class="hold-item">总定投成本 <strong>${{ "%.2f"|format(h.total_cost_basis) }}</strong></span>
+    {%- if h.by_symbol and h.by_symbol|length > 1 -%}
+    <div class="hold-breakdown muted">
+      {%- for sym, row in h.by_symbol|dictsort -%}
+        <div><span class="avg-sym">{{ sym }}</span>
+          {{ row.shares }}股
+          · 成本 ${{ "%.2f"|format(row.cost_basis) }}
+          {%- if row.market_value is not none %} · 市值 ${{ "%.2f"|format(row.market_value) }}{% endif -%}
+        </div>
+      {%- endfor -%}
+    </div>
+    {%- endif -%}
+  </div>
+  {%- else -%}
+  <div class="plan-holdings muted">总股数 — · 总市值 — · 总定投成本 —</div>
+  {%- endif -%}
+{%- endmacro %}
+<div class="grid grid-2">
+  <section class="card">
+    <div class="card-header"><h2>Auth 状态</h2></div>
+    <div class="card-body-grow">
+    {% if not oauth_configured %}
+      <p class="muted">请在 <code>.env</code> 填写 <code>SCHWAB_APP_KEY</code> / <code>SCHWAB_APP_SECRET</code>（来自 Schwab Developer Portal）。Callback 须与门户完全一致：<code>{{ settings.schwab_callback_url }}</code>。</p>
+    {% endif %}
+    <div class="auth-status-row">
+      {% if auth.linked and auth.refresh_valid %}
+        <span class="badge badge-ok">Linked</span>
+      {% elif auth.linked %}
+        <span class="badge badge-warn">Refresh expired</span>
+      {% else %}
+        <span class="badge badge-warn">Not linked</span>
+      {% endif %}
+      <span class="muted">{{ auth.message }}</span>
+    </div>
+    {% if auth.linked %}
+      <div class="auth-meta muted">
+        <p>Access expires: {% if auth.access_expires_at %}{{ china_time_html(auth.access_expires_at)|safe }}{% else %}—{% endif %}</p>
+        <p>Refresh expires (~7d): {% if auth.refresh_expires_at %}{{ china_time_html(auth.refresh_expires_at)|safe }}{% else %}—{% endif %}</p>
+        <p>Updated: {% if auth.updated_at %}{{ china_time_html(auth.updated_at)|safe }}{% else %}—{% endif %}</p>
+      </div>
+      <form class="inline" method="post" action="{{ bp() }}/auth/logout">
+        {{ csrf_field(request)|safe }}
+        <button class="btn btn-ghost" type="submit">Logout / 清除本地 Token</button>
+      </form>
+    {% else %}
+      <p><a class="btn btn-primary" href="{{ bp() }}/auth/login">Connect Schwab OAuth</a></p>
+    {% endif %}
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-header"><h2>账户 / Accounts</h2></div>
+    <div class="card-body-grow">
+    {% if accounts_error %}
+      <p class="muted">无法拉取账户：{{ accounts_error }}</p>
+    {% elif not accounts %}
+      <p class="empty">暂无账户摘要（未登录或 API 未返回）。</p>
+    {% else %}
+      {# Desktop #}
+      <div class="table-scroll dash-table-desktop">
+        <table>
+          <thead><tr><th>账户号</th><th>绑定</th></tr></thead>
+          <tbody>
+          {% for a in accounts %}
+            <tr>
+              <td>{{ a.accountNumber or a.get("accountNumber", "—") }}</td>
+              <td><span class="badge badge-ok">已连接</span></td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {# Mobile cards #}
+      <div class="dash-cards-mobile">
+        {% for a in accounts %}
+          <div class="dash-card">
+            <div class="dash-card-row">
+              <span class="dash-card-title">账户 {{ a.accountNumber or a.get("accountNumber", "—") }}</span>
+              <span class="badge badge-ok">已连接</span>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+      <p class="muted account-note">创建或保存计划时若尚未绑定账户且已登录，会自动绑定上方第一个账户；绑定后锁定。实盘下单要求计划已绑定账户。</p>
+    {% endif %}
+    </div>
+  </section>
+</div>
+
+
+<section class="card mt cash-panel">
+  <div class="card-header"><h2>现金余额 / Cash (margin-safe)</h2></div>
+  <div class="card-body-grow">
+  {% if not cash_forecast %}
+    <p class="muted">连接 OAuth 后显示现金与剩余定投次数（不含融资额度）。</p>
+  {% elif cash_forecast.error %}
+    <p class="muted">无法读取现金：{{ cash_forecast.error }}</p>
+  {% else %}
+    {% if cash_forecast.any_low_cash %}
+    <div class="alert alert-warn">
+      <strong>现金预警：</strong>有启用计划剩余定投次数 ≤ {{ cash_forecast.warn_threshold }}。
+      实盘只用可用现金、不用融资额度；现金不足将跳过本次定投。
+    </div>
+    {% endif %}
+    {% for a in cash_forecast.accounts %}
+      <dl>
+        <dt>账户</dt>
+        <dd>{% if a.account_type %}{{ a.account_type }}{% else %}已绑定账户{% endif %}</dd>
+        <dt>可用现金</dt>
+        <dd>
+          {% if a.cash is none %}
+            <span class="badge badge-warn">未能读取</span>
+            {% if a.error %}<span class="muted">{{ a.error }}</span>{% endif %}
+          {% else %}
+            <strong>${{ "%.2f"|format(a.cash) }}</strong>
+            <span class="muted cash-field-note">（不含融资额度）</span>
+          {% endif %}
+        </dd>
+      </dl>
+    {% else %}
+      <p class="muted">暂无已绑定账户。</p>
+    {% endfor %}
+    <p class="muted cash-field-note">定投门槛只用可用现金，不会使用融资购买力。</p>
+    {% if cash_forecast.plans %}
+      <h3 style="font-size:0.95rem;margin:1rem 0 0.35rem;">计划剩余次数（按当前名义金额估算）</h3>
+      {% for row in cash_forecast.plans %}
+        <div class="cash-plan-row">
+          <strong>{{ row.name }}</strong>
+          {% if row.enabled %}<span class="badge badge-ok">开</span>{% else %}<span class="badge badge-warn">关</span>{% endif %}
+          <span class="muted">名义 ~${{ "%.2f"|format(row.notional or 0) }}</span>
+          {% if row.remaining_runs is none %}
+            <span class="muted">剩余 —</span>
+          {% else %}
+            {% if row.low_cash %}
+              <span class="badge badge-warn">剩余 ~{{ row.remaining_runs }} 次</span>
+            {% else %}
+              <span class="badge badge-ok">剩余 ~{{ row.remaining_runs }} 次</span>
+            {% endif %}
+          {% endif %}
+        </div>
+      {% endfor %}
+      <p class="muted cash-field-note">预警阈值：剩余 ≤ {{ cash_forecast.warn_threshold }} 次。</p>
+    {% endif %}
+  {% endif %}
+  </div>
+</section>
+
+<section class="card mt">
+  <div class="card-header">
+    <h2>定投计划 / DCA Plans</h2>
+    <a class="btn btn-primary" href="{{ bp() }}/plans/new">+ New Plan</a>
+  </div>
+  {% if plans %}
+  <p class="muted cash-field-note" style="margin:0.35rem 1rem 0.15rem;">注：总股数 / 市值 / 成本 / 均价 / 盈亏仅统计本定投系统成交，不含 Schwab 官网、App、ToS 的买卖。</p>
+  {% endif %}
+  {% if not plans %}
+    <p class="empty">还没有计划。创建例如每周一 10:00 ET 买入 VOO,QQQ。</p>
+  {% else %}
+    {# Desktop table #}
+    <div class="table-scroll dash-table-desktop">
+      <table class="plans-table">
+        <thead>
+          <tr>
+            <th class="col-name">Name</th><th class="col-symbols">Symbols</th><th class="col-usd">USD</th><th>持仓汇总</th><th>成本均价 / 现价 / 盈亏</th><th class="col-schedule">Schedule</th><th class="col-enabled">Enabled</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for p in plans %}
+          {% set costs = plan_avg_costs.get(p.id) if plan_avg_costs else none %}
+          <tr>
+            <td>{{ p.name }}</td>
+            <td>{{ p.symbols_raw }}</td>
+            <td>{% if p.shares_per_symbol %}{{ p.shares_per_symbol }}股{% else %}${{ "%.2f"|format(p.amount_usd) }}{% endif %}</td>
+            <td class="holdings-cell">{{ holdings_summary(p) }}</td>
+            <td class="avg-cost-cell">
+              {% if costs %}
+                {% if costs|length == 1 %}
+                  {% for sym, price in costs.items() %}
+                    <span class="fill-price">成本均价 ${{ fmt_price(price) }}</span>
+                    {{ spot_label(sym) }}
+                    {{ pnl_span(sym, price) }}
+                  {% endfor %}
+                {% else %}
+                  <div class="avg-cost-multi">
+                    {% for sym, price in costs|dictsort %}
+                      <div><span class="avg-sym">{{ sym }}</span> <span class="fill-price">${{ fmt_price(price) }}</span> {{ spot_label(sym) }} {{ pnl_span(sym, price) }}</div>
+                    {% endfor %}
+                  </div>
+                {% endif %}
+              {% else %}
+                <span class="muted">成本均价 —</span>
+                {% if p.symbols|length == 1 %}
+                  {{ spot_label(p.symbols[0]) }}
+                  {{ pnl_span(p.symbols[0], none) }}
+                {% elif p.symbols %}
+                  <div class="avg-cost-multi">
+                    {% for sym in p.symbols %}
+                      <div><span class="avg-sym">{{ sym }}</span> {{ spot_label(sym) }} {{ pnl_span(sym, none) }}</div>
+                    {% endfor %}
+                  </div>
+                {% else %}
+                  <span class="muted market-price">现价 —</span>
+                  <span class="muted pnl">盈亏 —</span>
+                {% endif %}
+              {% endif %}
+            </td>
+            <td class="muted schedule-cell">
+              {% if p.schedule_type == 'daily' or p.schedule_type == 'cron' %}每天(交易日)
+              {% elif p.schedule_type == 'weekly' %}每周·{{ ['一','二','三','四','五','六','日'][p.weekday] }}
+              {% elif p.schedule_type == 'monthly' %}每月{{ p.day_of_month }}日
+              {% else %}{{ p.schedule_type }}{% endif %}
+              @ {{ p.time_hhmm }} {{ p.timezone }}
+              {% if p.last_run_at %}<div class="ts-block">上次 {{ china_time_html(p.last_run_at)|safe }}</div>{% else %}<div class="ts-block">上次 —</div>{% endif %}
+              {% if p.next_due_at %}<div class="ts-block">下次 {{ china_time_html(p.next_due_at)|safe }}</div>{% endif %}
+            </td>
+            <td>{% if p.enabled %}<span class="badge badge-ok">开</span>{% else %}<span class="badge badge-warn">关</span>{% endif %}</td>
+            <td class="actions plan-actions-cell">
+              <a class="btn" href="{{ bp() }}/plans/{{ p.id }}/chart">日线</a>
+              <a class="btn" href="{{ bp() }}/plans/{{ p.id }}/edit">编辑</a>
+              {% if dry_run_mode() %}
+              <form class="inline" method="post" action="{{ bp() }}/plans/{{ p.id }}/run"
+                    onsubmit="var b=this.querySelector('button'); if(!confirm('立即运行（当前 DRY-RUN，不会真实下单）？')) return false; b.disabled=true; b.textContent='运行中…'; return true;">
+                {{ csrf_field(request)|safe }}
+                <button class="btn" type="submit">立即运行</button>
+              </form>
+              {% else %}
+              <a class="btn btn-primary" href="{{ bp() }}/plans/{{ p.id }}/run/preview">立即运行 · 预览</a>
+              {% endif %}
+              <form class="inline" method="post" action="{{ bp() }}/plans/{{ p.id }}/toggle">
+                {{ csrf_field(request)|safe }}
+                {% if p.enabled %}
+                <button class="btn" type="submit" title="暂停定投">暂停</button>
+                {% else %}
+                <button class="btn btn-primary" type="submit" title="启用定投">启用</button>
+                {% endif %}
+              </form>
+              <form class="inline" method="post" action="{{ bp() }}/plans/{{ p.id }}/delete"
+                    onsubmit="return confirm('确定删除此定投计划？');">
+                {{ csrf_field(request)|safe }}
+                <button class="btn btn-danger" type="submit">删除</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {# Mobile: stacked plan cards #}
+    <div class="dash-cards-mobile">
+      {% for p in plans %}
+        {% set costs = plan_avg_costs.get(p.id) if plan_avg_costs else none %}
+        <article class="dash-card plan-card">
+          <div class="dash-card-row">
+            <span class="dash-card-title">{{ p.name }}</span>
+            {% if p.enabled %}<span class="badge badge-ok">开</span>{% else %}<span class="badge badge-warn">关</span>{% endif %}
+          </div>
+          <div class="dash-card-meta">
+            <div><strong>{{ p.symbols_raw }}</strong>
+              · {% if p.shares_per_symbol %}{{ p.shares_per_symbol }}股{% else %}${{ "%.2f"|format(p.amount_usd) }}{% endif %}
+            </div>
+            <div class="muted">
+              {% if p.schedule_type == 'daily' or p.schedule_type == 'cron' %}每天(交易日)
+              {% elif p.schedule_type == 'weekly' %}每周·{{ ['一','二','三','四','五','六','日'][p.weekday] }}
+              {% elif p.schedule_type == 'monthly' %}每月{{ p.day_of_month }}日
+              {% else %}{{ p.schedule_type }}{% endif %}
+              @ {{ p.time_hhmm }} {{ p.timezone }}
+              {% if p.last_run_at %}<div>上次 {{ china_time_html(p.last_run_at)|safe }}</div>{% else %}<div>上次 —</div>{% endif %}
+              {% if p.next_due_at %}<div>下次 {{ china_time_html(p.next_due_at)|safe }}</div>{% endif %}
+            </div>
+            {{ holdings_summary(p) }}
+            <div class="avg-cost-block">
+              {% if costs %}
+                {% if costs|length == 1 %}
+                  {% for sym, price in costs.items() %}
+                    <span class="fill-price">成本均价 ${{ fmt_price(price) }}</span>
+                    {{ spot_label(sym) }}
+                    {{ pnl_span(sym, price) }}
+                  {% endfor %}
+                {% else %}
+                  <div class="muted" style="margin-bottom:0.15rem;">成本均价 / 现价 / 盈亏</div>
+                  {% for sym, price in costs|dictsort %}
+                    <div><span class="avg-sym">{{ sym }}</span> <span class="fill-price">${{ fmt_price(price) }}</span> {{ spot_label(sym) }} {{ pnl_span(sym, price) }}</div>
+                  {% endfor %}
+                {% endif %}
+              {% else %}
+                <span class="muted">成本均价 —</span>
+                {% if p.symbols|length == 1 %}
+                  {{ spot_label(p.symbols[0]) }}
+                  {{ pnl_span(p.symbols[0], none) }}
+                {% elif p.symbols %}
+                  {% for sym in p.symbols %}
+                    <div><span class="avg-sym">{{ sym }}</span> {{ spot_label(sym) }} {{ pnl_span(sym, none) }}</div>
+                  {% endfor %}
+                {% else %}
+                  <span class="muted market-price">现价 —</span>
+                  <span class="muted pnl">盈亏 —</span>
+                {% endif %}
+              {% endif %}
+            </div>
+          </div>
+          <div class="dash-card-actions">
+            <a class="btn btn-touch btn-block" href="{{ bp() }}/plans/{{ p.id }}/chart">日线</a>
+            <a class="btn btn-touch btn-block" href="{{ bp() }}/plans/{{ p.id }}/edit">编辑</a>
+            {% if dry_run_mode() %}
+            <form method="post" action="{{ bp() }}/plans/{{ p.id }}/run"
+                  onsubmit="var b=this.querySelector('button'); if(!confirm('立即运行（当前 DRY-RUN，不会真实下单）？')) return false; b.disabled=true; b.textContent='运行中…'; return true;">
+              {{ csrf_field(request)|safe }}
+              <button class="btn btn-touch btn-block" type="submit">立即运行</button>
+            </form>
+            {% else %}
+            <a class="btn btn-primary btn-touch btn-block" href="{{ bp() }}/plans/{{ p.id }}/run/preview">立即运行 · 预览</a>
+            {% endif %}
+            <form method="post" action="{{ bp() }}/plans/{{ p.id }}/toggle">
+              {{ csrf_field(request)|safe }}
+              {% if p.enabled %}
+              <button class="btn btn-touch btn-block" type="submit">暂停</button>
+              {% else %}
+              <button class="btn btn-primary btn-touch btn-block" type="submit">启用</button>
+              {% endif %}
+            </form>
+            <form method="post" action="{{ bp() }}/plans/{{ p.id }}/delete"
+                  onsubmit="return confirm('确定删除此定投计划？');">
+              {{ csrf_field(request)|safe }}
+              <button class="btn btn-danger btn-touch btn-block" type="submit">删除</button>
+            </form>
+          </div>
+        </article>
+      {% endfor %}
+    </div>
+  {% endif %}
+</section>
+
+<section class="card mt">
+  <div class="card-header"><h2>最近运行 / Recent runs</h2></div>
+  {% if not recent_logs %}
+    <p class="empty">暂无运行记录。</p>
+  {% else %}
+    <div class="table-scroll dash-table-desktop">
+      <table class="runs-table">
+        <thead><tr><th>时间（中国）</th><th>计划</th><th>触发</th><th>模式</th><th>结果</th><th>说明</th></tr></thead>
+        <tbody>
+        {% for log in recent_logs %}
+          {% set st = run_status_info(log) %}
+          <tr>
+            <td class="muted">{{ china_time_html(log.created_at)|safe }}</td>
+            <td>{{ log.plan_name or log.plan_id }}</td>
+            <td><span class="badge badge-muted">{{ st.trigger_label }}</span></td>
+            <td>{% if log.dry_run %}<span class="badge badge-dry">模拟</span>{% else %}<span class="badge badge-live">实盘</span>{% endif %}</td>
+            <td><span class="badge {{ st.badge_class }}">{{ st.label }}</span></td>
+            <td class="muted">{{ log.error or "—" }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="dash-cards-mobile">
+      {% for log in recent_logs %}
+        {% set st = run_status_info(log) %}
+        <div class="dash-card">
+          <div class="dash-card-row">
+            <span class="dash-card-title">{{ log.plan_name or ("计划 " ~ log.plan_id) }}</span>
+            <span class="badge badge-muted">{{ st.trigger_label }}</span>
+            {% if log.dry_run %}<span class="badge badge-dry">模拟</span>{% else %}<span class="badge badge-live">实盘</span>{% endif %}
+            <span class="badge {{ st.badge_class }}">{{ st.label }}</span>
+          </div>
+          <div class="muted dash-card-meta">{{ china_time_html(log.created_at)|safe }}</div>
+          {% if log.error %}<div class="muted">{{ log.error }}</div>{% endif %}
+        </div>
+      {% endfor %}
+    </div>
+    <p class="section-link"><a href="{{ bp() }}/runs">查看全部 →</a></p>
+  {% endif %}
+</section>
+{% endblock %}
